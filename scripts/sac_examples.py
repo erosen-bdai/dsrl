@@ -15,6 +15,33 @@ from stable_baselines3.common.callbacks import BaseCallback
 import glob
 import os
 
+class AlohaActionScaleWrapper(gym.Wrapper):
+    def __init__(self, env, scale=0.25):
+        super().__init__(env)
+        self.scale = scale
+
+    def step(self, action):
+        # Multiply the action by the scale
+        scaled_action = action * self.scale
+        return self.env.step(scaled_action)
+
+
+class AlohaFlattenObservationWrapper(gym.ObservationWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        
+        # Replace nested Dict with a flat Dict
+        self.observation_space = gym.spaces.Dict({
+            "agent_pos": env.observation_space["agent_pos"],
+            "pixels_top": env.observation_space["pixels"]["top"],
+        })
+
+    def observation(self, obs):
+        return {
+            "agent_pos": obs["agent_pos"],
+            "pixels_top": obs["pixels"]["top"],
+        }
+
 class VideoRecorderCallback(BaseCallback):
     """
     Logs VecVideoRecorder videos to wandb.
@@ -236,6 +263,8 @@ def task_import(task):
         import gym_hil
     elif "fetch" in task:
         import gymnasium_robotics
+    elif "aloha" in task:
+        import gym_aloha
 
 # stats_window_size: default (100), determines how many episodes to go over for reporting evals like returns, success, etc.
 cfgs = {
@@ -277,6 +306,12 @@ cfgs = {
             "seed": 42,
             
         },
+        "aloha":
+        {
+            "policy":"MultiInputPolicy",
+            "learning_rate": 0.001,
+            "buffer_size":10_000,
+        }
     },
     "other":
     {
@@ -304,11 +339,15 @@ cfgs = {
             "total_timesteps": 1e6,
             "env_name": "FetchPickAndPlaceDense-v4",
         },
+        "aloha":{
+            "total_timesteps": 1e6,
+            "env_name": "gym_aloha/AlohaTransferCube-v0"
+        }
     }
 
 }
 
-task = "gym_hil"
+task = "aloha"
 task_import(task)
 sac_config = cfgs["sac"][task]
 other_config = cfgs["other"][task]
@@ -347,9 +386,14 @@ def make_env(video_folder, record_trigger):
     elif "fetch" in task:
         env = gym.make(other_config["env_name"],render_mode="rgb_array", max_episode_steps=100)
         env = FlattenObservation(env)
+    elif "aloha" in task:
+        env = gym.make(other_config["env_name"],obs_type="pixels_agent_pos",render_mode="rgb_array", max_episode_steps=100)
+        env = AlohaFlattenObservationWrapper(env)
+        env = AlohaActionScaleWrapper(env)
+        env = TimeLimit(env, max_episode_steps=25)
 
     elif task in ["gym_hil"]:
-        env = gym.make(other_config["env_name"],reward_type="dense",render_mode="rgb_array",random_block_position=False)
+        env = gym.make(other_config["env_name"],reward_type="dense",render_mode="rgb_array",random_block_position=True)
         # flatten the obs
         env = FlattenObservation(env)
 

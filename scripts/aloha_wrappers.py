@@ -51,7 +51,7 @@ class Pi0EnvWrapper(gym.Env):
                 low=-np.inf, high=np.inf, shape=(self.obs_dim_size,), dtype=np.float32
             )
         elif self.obs_strategy == "box":
-            self.obs_dim_size = 14+7 # propioception + box pose
+            self.obs_dim_size = 39 # propioception (qvel too) + box pose
             self.observation_space = spaces.Box(
                 low=-np.inf, high=np.inf, shape=(self.obs_dim_size,), dtype=np.float32
             )

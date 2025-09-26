@@ -261,6 +261,8 @@ def task_import(task):
         import gym_pusht
     elif task =="pusht_latent":
         import gym_pusht
+    elif "aloha" in task:
+        import gym_aloha
     elif task == "gym_hil":
         import gym_hil
     elif "fetch" in task:
@@ -289,6 +291,17 @@ def make_env(video_folder, record_trigger, other_config):
         env = FrameStackObservation(env, stack_size=2)
         # time limit
         env = TimeLimit(env, max_episode_steps=100)
+    elif "aloha" in task:
+        device = "cuda"
+        from aloha_wrappers import generate_steerable_aloha_gym_env
+        env = generate_steerable_aloha_gym_env(device, other_config["desired_action_dim"])
+
+        # make action min/max -1,1 based on desired_action_dim
+        action_min = np.ones([other_config["desired_action_dim"]])*-1
+        action_max = np.ones([other_config["desired_action_dim"]])
+        # linearlly normalize obs/action to [-1,1]
+        env = RescaleAction(env, min_action=action_min, max_action=action_max)
+        env = TimeLimit(env, max_episode_steps=400)
     elif task == "pusht_latent":
         # Check device is available
         device = "cuda"
@@ -398,6 +411,12 @@ if __name__ == "__main__":
                 "learning_rate":0.001,
                 "policy_kwargs" : {"net_arch": [512,512]}
             },
+            "aloha_pick_cube_latent":
+            {
+                "policy": "MlpPolicy",
+                "learning_rate":0.001,
+                "policy_kwargs" : {"net_arch": [256,256]}
+            },
             "gym_hil":{
                 "policy": "MlpPolicy",
                 "learning_rate": 0.001,
@@ -441,6 +460,11 @@ if __name__ == "__main__":
                 "total_timesteps": 1e6,
                 "desired_action_dim":2
             },
+            "aloha_pick_cube_latent":
+            {
+                "total_timesteps": 1e6,
+                "desired_action_dim":10
+            },
             "gym_hil":{
                 "total_timesteps": 1e6,
                 "env_name": "gym_hil/PandaPickCubeBase-v0",
@@ -457,7 +481,7 @@ if __name__ == "__main__":
 
     }
 
-    task = "pusht_latent"
+    task = "aloha_pick_cube_latent"
     task_import(task)
     sac_config = cfgs["sac"][task]
     other_config = cfgs["other"][task]

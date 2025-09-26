@@ -32,16 +32,31 @@ class Pi0EnvWrapper(gym.Env):
         self.device = get_device_from_parameters(self.policy)
         self.dtype = get_dtype_from_parameters(self.policy)
 
+        # For getting box pose
+
+        self.obs_strategy = "box"
+        if self.obs_strategy == "box":
+            self.dm_env = env.env.env.env._env
+
         self.n_action_steps = self.policy.config.n_action_steps
         self.max_action_dim = self.policy.config.max_action_dim
         self.action_chunk_dim = self.policy.config.n_action_steps * self.policy.config.max_action_dim
 
         # Set obs space
         # TODO: I'm hardcoding this for mean pooling over spatial tokens + 14 robot state
-        self.obs_dim_size = 2080
-        self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf, shape=(self.obs_dim_size,), dtype=np.float32
-        )
+        
+        if self.obs_strategy == "pi0_encoder":
+            self.obs_dim_size = 2080
+            self.observation_space = spaces.Box(
+                low=-np.inf, high=np.inf, shape=(self.obs_dim_size,), dtype=np.float32
+            )
+        elif self.obs_strategy == "box":
+            self.obs_dim_size = 14+7 # propioception + box pose
+            self.observation_space = spaces.Box(
+                low=-np.inf, high=np.inf, shape=(self.obs_dim_size,), dtype=np.float32
+            )
+        else:
+            raise ValueError(f"self.obs_strategy needs to be valid")
 
         # This action space is chunks of the original action space. For simplicity, we say it is a flat action space of action_dim*pred_horizon (although we only will execute n_action_steps amount of them)
         # TODO: Currently has bounds between -3,3 to capture with high probability all samples that fall under gaussian
@@ -82,7 +97,7 @@ class Pi0EnvWrapper(gym.Env):
 
     def reset(self, **kwargs):
         # TODO load gym seed if it was given at construction
-        obs, info = self.env.reset(**kwargs)
+        obs, info = self.env.reset(seed=0)
         
         # save the obs for base policy to use in next step
         self._last_obs = obs
@@ -93,44 +108,68 @@ class Pi0EnvWrapper(gym.Env):
             # reset the frames, and add initial
             self.frames = [self.render()]
 
-        # Lets process this observation to obs the first obs for policy
-        obs = preprocess_observation(obs)
+
+        if self.obs_strategy == "box":
+            # Lets process this observation to obs the first obs for policy
+            obs = preprocess_observation(obs)
+            
+            # TODO: Grab device rather than hardcode cuda
+            obs = {
+                key: obs[key].to("cuda", non_blocking=True) for key in obs
+            }
+
+            # Set task description
+            # TODO: For now, just using hardcoded transfer_cube, should be environment dependent
+            obs["task"] = ["transfer_cube"]
+            obs = self.policy.normalize_inputs(obs)
+
+            state = self.policy.prepare_state(obs)
+            box_pose = self.dm_env.physics.named.data.qpos[-7:]
+
+            box_pose_propioception = np.concatenate([np.expand_dims(box_pose,axis=0), state.detach().cpu().numpy()], axis=1)
+
+            return box_pose_propioception, info
+
+        elif self.obs_strategy == "pi0_encoder":
+            ############## THIS IS getting obs from image like pi0 does
+            # Lets process this observation to obs the first obs for policy
+            obs = preprocess_observation(obs)
+            
+            # TODO: Grab device rather than hardcode cuda
+            obs = {
+                key: obs[key].to("cuda", non_blocking=True) for key in obs
+            }
+
+            # Set task description
+            # TODO: For now, just using hardcoded transfer_cube, should be environment dependent
+            obs["task"] = ["transfer_cube"]
+
+            # TODO: I don't think this is currently true so i'm commenting it out, but check it out
+            # if self.config.adapt_to_pi_aloha:
+            #     observation[OBS_STATE] = self._pi_aloha_decode_state(batch[OBS_STATE])
+
+            obs = self.policy.normalize_inputs(obs)
+
+            # queue should be totally empty due to reset
+            assert len(self.policy._action_queue) == 0
+
+            images, img_masks = self.policy.prepare_images(obs)
+            state = self.policy.prepare_state(obs)
+            lang_tokens, lang_masks = self.policy.prepare_language(obs)
+
+            # TODO: These embeddings seem to include language stuff as well, probably can rmeove, check out embed_prefix for more detail.
+            prefix_embs, prefix_pad_masks, prefix_att_masks = self.policy.model.embed_prefix(
+                images, img_masks, lang_tokens, lang_masks
+            )
+            # TODO: prefix_embs have shape [B, 304, 2048] (B, num_spatial_tokens, feature_dim). I am taking mean over num_spatial to just get 2048 dim. should experiment with other approaches.
+            # TODO: The original DSRL paper trains a cnn on the images + uses last hidden state of last token, may want to try those out too.
+            mean_pool_prefix_embs = prefix_embs.mean(1)
         
-        # TODO: Grab device rather than hardcode cuda
-        obs = {
-            key: obs[key].to("cuda", non_blocking=True) for key in obs
-        }
-
-        # Set task description
-        # TODO: For now, just using hardcoded transfer_cube, should be environment dependent
-        obs["task"] = ["transfer_cube"]
-
-        # TODO: I don't think this is currently true so i'm commenting it out, but check it out
-        # if self.config.adapt_to_pi_aloha:
-        #     observation[OBS_STATE] = self._pi_aloha_decode_state(batch[OBS_STATE])
-
-        obs = self.policy.normalize_inputs(obs)
-
-        # queue should be totally empty due to reset
-        assert len(self.policy._action_queue) == 0
-
-        images, img_masks = self.policy.prepare_images(obs)
-        state = self.policy.prepare_state(obs)
-        lang_tokens, lang_masks = self.policy.prepare_language(obs)
-
-        # TODO: These embeddings seem to include language stuff as well, probably can rmeove, check out embed_prefix for more detail.
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.policy.model.embed_prefix(
-            images, img_masks, lang_tokens, lang_masks
-        )
-        # TODO: prefix_embs have shape [B, 304, 2048] (B, num_spatial_tokens, feature_dim). I am taking mean over num_spatial to just get 2048 dim. should experiment with other approaches.
-        # TODO: The original DSRL paper trains a cnn on the images + uses last hidden state of last token, may want to try those out too.
-        mean_pool_prefix_embs = prefix_embs.mean(1)
-    
-        # include the robot state here
-        # TODO: For now, using just raw state (14 dim). The policy.model has `state_proj` where state is processed in denoise_step, could use that too
-        img_state_emb = torch.cat([mean_pool_prefix_embs,state],axis=1).detach().cpu().numpy()
-        
-        return img_state_emb, info
+            # include the robot state here
+            # TODO: For now, using just raw state (14 dim). The policy.model has `state_proj` where state is processed in denoise_step, could use that too
+            img_state_emb = torch.cat([mean_pool_prefix_embs,state],axis=1).detach().cpu().numpy()
+            
+            return img_state_emb, info
 
     def expand_action(self, action, target_size):
         """
@@ -209,47 +248,72 @@ class Pi0EnvWrapper(gym.Env):
                 break
 
         assert self._last_obs == observation
+        obs = observation
 
-        # Lets process this observation to obs the first obs for policy
-        obs = preprocess_observation(observation)
+        if self.obs_strategy == "box":
+            # Lets process this observation to obs the first obs for policy
+            obs = preprocess_observation(obs)
+            
+            # TODO: Grab device rather than hardcode cuda
+            obs = {
+                key: obs[key].to("cuda", non_blocking=True) for key in obs
+            }
+
+            # Set task description
+            # TODO: For now, just using hardcoded transfer_cube, should be environment dependent
+            obs["task"] = ["transfer_cube"]
+            obs = self.policy.normalize_inputs(obs)
+
+            state = self.policy.prepare_state(obs)
+            box_pose = self.dm_env.physics.named.data.qpos[-7:]
+
+            final_obs = np.concatenate([np.expand_dims(box_pose,axis=0), state.detach().cpu().numpy()], axis=1)
+            
+        elif self.obs_strategy == "pi0_encoder":
+            ############## THIS IS getting obs from image like pi0 does
+            # Lets process this observation to obs the first obs for policy
+            obs = preprocess_observation(obs)
+            
+            # TODO: Grab device rather than hardcode cuda
+            obs = {
+                key: obs[key].to("cuda", non_blocking=True) for key in obs
+            }
+
+            # Set task description
+            # TODO: For now, just using hardcoded transfer_cube, should be environment dependent
+            obs["task"] = ["transfer_cube"]
+
+            # TODO: I don't think this is currently true so i'm commenting it out, but check it out
+            # if self.config.adapt_to_pi_aloha:
+            #     observation[OBS_STATE] = self._pi_aloha_decode_state(batch[OBS_STATE])
+
+            obs = self.policy.normalize_inputs(obs)
+
+            # queue should be totally empty due to reset
+            assert len(self.policy._action_queue) == 0
+
+            images, img_masks = self.policy.prepare_images(obs)
+            state = self.policy.prepare_state(obs)
+            lang_tokens, lang_masks = self.policy.prepare_language(obs)
+
+            # TODO: These embeddings seem to include language stuff as well, probably can rmeove, check out embed_prefix for more detail.
+            prefix_embs, prefix_pad_masks, prefix_att_masks = self.policy.model.embed_prefix(
+                images, img_masks, lang_tokens, lang_masks
+            )
+            # TODO: prefix_embs have shape [B, 304, 2048] (B, num_spatial_tokens, feature_dim). I am taking mean over num_spatial to just get 2048 dim. should experiment with other approaches.
+            # TODO: The original DSRL paper trains a cnn on the images + uses last hidden state of last token, may want to try those out too.
+            mean_pool_prefix_embs = prefix_embs.mean(1)
         
-        # TODO: Grab device rather than hardcode cuda
-        obs = {
-            key: obs[key].to("cuda", non_blocking=True) for key in obs
-        }
-
-        # Set task description
-        # TODO: For now, just using hardcoded transfer_cube, should be environment dependent
-        obs["task"] = ["transfer_cube"]
-
-        # TODO: I don't think this is currently true so i'm commenting it out, but check it out
-        # if self.config.adapt_to_pi_aloha:
-        #     observation[OBS_STATE] = self._pi_aloha_decode_state(batch[OBS_STATE])
-
-        obs = self.policy.normalize_inputs(obs)
-
-        images, img_masks = self.policy.prepare_images(obs)
-        state = self.policy.prepare_state(obs)
-        lang_tokens, lang_masks = self.policy.prepare_language(obs)
-
-        # TODO: These embeddings seem to include language stuff as well, probably can rmeove, check out embed_prefix for more detail.
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.policy.model.embed_prefix(
-            images, img_masks, lang_tokens, lang_masks
-        )
-        # TODO: prefix_embs have shape [B, 304, 2048] (B, num_spatial_tokens, feature_dim). I am taking mean over num_spatial to just get 2048 dim. should experiment with other approaches.
-        # TODO: The original DSRL paper trains a cnn on the images + uses last hidden state of last token, may want to try those out too.
-        mean_pool_prefix_embs = prefix_embs.mean(1)
-    
-        # include the robot state here
-        # TODO: For now, using just raw state (14 dim). The policy.model has `state_proj` where state is processed in denoise_step, could use that too
-        img_state_emb = torch.cat([mean_pool_prefix_embs,state],axis=1).detach().cpu().numpy()
-        
+            # include the robot state here
+            # TODO: For now, using just raw state (14 dim). The policy.model has `state_proj` where state is processed in denoise_step, could use that too
+            final_obs = torch.cat([mean_pool_prefix_embs,state],axis=1).detach().cpu().numpy()
+            
 
         # return last obs, terminated, truncated, and info + the cumulative rewards along the way
         # TODO: The truncated comes from the base env, but I think pusht_env always return Fales for truncated (i.e: no timeouts).
         # If we do get timeouts in the env, we should track that correctly + make critic update take it into account (i.e: do bootstrapping if truncated=true, unlike no bootstrapping when terminated=true but truncated=false)
         # TODO: Returns info dict of last step, is that sufficient?
-        return img_state_emb, cumulative_rewards, terminated, truncated, info
+        return final_obs, cumulative_rewards, terminated, truncated, info
 
 
 
@@ -342,20 +406,13 @@ def run_basic_pi0_aloha(seeds : list[int] = [0], device : str = "cuda"):
         video_file_name = f"aloha_pi0_rollout{rollout}_seed{seed}.mp4"
         imageio.mimsave(f"{video_dir_path}/{video_file_name}", frames, fps=fps)
 
-def test_gym_wrapper_env():
+
+def generate_steerable_aloha_gym_env(
+    device: str = "cuda", desired_action_dim=14
+):
+    # TODO: Add support for insert
     import gym_aloha
-    fix_noise = True
-    video_dir_path = "aloha_pi0_videos_wrapper_fixnoiseseed6"
 
-    os.makedirs(video_dir_path, exist_ok=True)
-    seeds = [6]*5
-    fps = 30
-    max_steps = 2000
-    desired_action_dim = 14
-
-    device="cuda"
-
-    # TODO: Add insert
     gym_kwargs = {
         "obs_type": "pixels_agent_pos",
         "render_mode": "rgb_array",
@@ -368,10 +425,27 @@ def test_gym_wrapper_env():
 
     wrapped_env = Pi0EnvWrapper(env=env, policy=policy, desired_action_dim=desired_action_dim)
     
+    return(wrapped_env)
+
+def test_gym_wrapper_env():
+    fix_noise = False
+    video_dir_path = "aloha_pi0_videos_wrapper_actionsize13_randomnoiseseed0_sampleactionspace"
+
+    os.makedirs(video_dir_path, exist_ok=True)
+    seeds = [0]*10
+    fps = 30
+    max_steps = 2000
+    desired_action_dim = 1600
+
+    device="cuda"
+
+    wrapped_env = generate_steerable_aloha_gym_env(device, desired_action_dim)
+
     if fix_noise:
-        action =  np.random.randn(
-                desired_action_dim
-            )
+        # action =  np.random.randn(
+        #         desired_action_dim
+        #     )
+        action = wrapped_env.action_space.sample()
 
     for rollout_idx, seed in enumerate(seeds):
         obs, info = wrapped_env.reset(seed=seed)
@@ -380,9 +454,10 @@ def test_gym_wrapper_env():
         frames = wrapped_env.get_wrapper_attr("frames")
         for current_step in range(max_steps):
             if not fix_noise:
-                action =  np.random.randn(
-                                desired_action_dim
-                            )
+                # action =  np.random.randn(
+                #                 desired_action_dim
+                #             )
+                action = wrapped_env.action_space.sample()
             obs, reward, terminated, truncated, info = wrapped_env.step(action)
 
             total_rewards += reward
@@ -398,7 +473,7 @@ def test_gym_wrapper_env():
 
 
 def main():
-    # seeds = [4]*10
+    seeds = [4]*10
     # run_basic_pi0_aloha(seeds=seeds)
 
     test_gym_wrapper_env()

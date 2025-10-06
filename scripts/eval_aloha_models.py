@@ -7,11 +7,11 @@ import imageio
 
 def main():
     # make env
-    ckpt_name = "breezy_lake_5000"
-    sac_path = f"./my_models/{ckpt_name}.zip"
-    desired_action_dim = 14
+    ckpt_name = "bright_dragonv1" #"fluent_sponge_v1"
+    sac_path = f"./my_models/sac_models/{ckpt_name}"
+    desired_action_dim = 50
     max_timesteps = 400
-    seeds = [0]*10
+    seeds = [10]*10
     deterministic = False
     video_dir_path = f"eval_aloha_ckpt{ckpt_name}_determinstic{deterministic}"
     fps=30

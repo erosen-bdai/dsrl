@@ -414,8 +414,15 @@ if __name__ == "__main__":
             "aloha_pick_cube_latent":
             {
                 "policy": "MlpPolicy",
-                "learning_rate":0.001,
-                "policy_kwargs" : {"net_arch": [256,256]}
+                "learning_rate":0.0001,
+                "gamma":0.999,
+                "gradient_steps":20,
+                "target_entropy":0,
+                "learning_starts":1000,
+                "train_freq": (1, "episode"),
+                "policy_kwargs" : {"net_arch": [512,512],
+                                   "log_std_init": 0.0,
+                                   "n_critics": 10,} 
             },
             "gym_hil":{
                 "policy": "MlpPolicy",
@@ -463,7 +470,7 @@ if __name__ == "__main__":
             "aloha_pick_cube_latent":
             {
                 "total_timesteps": 1e6,
-                "desired_action_dim":10
+                "desired_action_dim":40
             },
             "gym_hil":{
                 "total_timesteps": 1e6,

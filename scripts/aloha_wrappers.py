@@ -34,7 +34,7 @@ class Pi0EnvWrapper(gym.Env):
 
         # For getting box pose
 
-        self.obs_strategy = "box"
+        self.obs_strategy = "box" # "pi0_encoder" 
         if self.obs_strategy == "box":
             self.dm_env = env.env.env.env._env
 
@@ -97,7 +97,7 @@ class Pi0EnvWrapper(gym.Env):
 
     def reset(self, **kwargs):
         # TODO load gym seed if it was given at construction
-        obs, info = self.env.reset(seed=0)
+        obs, info = self.env.reset()
         
         # save the obs for base policy to use in next step
         self._last_obs = obs
@@ -189,6 +189,9 @@ class Pi0EnvWrapper(gym.Env):
         In future, just maintain my own queue and call generate_actions directly.
         """
 
+        if _action.ndim > 1:
+            _action = _action.squeeze()
+
         if self.desired_action_dim >= 1: # need to do tiling
             _action = self.expand_action(_action, self.action_chunk_dim)
         # reshape as needed
@@ -237,6 +240,15 @@ class Pi0EnvWrapper(gym.Env):
             # cumulate rewards
             # TODO: Include option for discounting.
             # TODO: maybe try sparse rewards
+            if terminated:
+                reward = 0
+            else:
+                reward = -1
+            # if reward == 0:
+            #     reward = -1.25
+            # else:
+            #     reward = -1*(1.0/reward)
+
             cumulative_rewards += reward
             # cumulative_rewards += reward
             if terminated:
@@ -289,9 +301,6 @@ class Pi0EnvWrapper(gym.Env):
 
             obs = self.policy.normalize_inputs(obs)
 
-            # queue should be totally empty due to reset
-            assert len(self.policy._action_queue) == 0
-
             images, img_masks = self.policy.prepare_images(obs)
             state = self.policy.prepare_state(obs)
             lang_tokens, lang_masks = self.policy.prepare_language(obs)
@@ -318,8 +327,8 @@ class Pi0EnvWrapper(gym.Env):
 
 
 def run_basic_pi0_aloha(seeds : list[int] = [0], device : str = "cuda"):
-    video_dir_path = "aloha_pi0_videos_lastckpt_seed4_fixnoise_clone"
-    fix_noise = True
+    video_dir_path = "basic_seed2_latestckpt_stochasticnoise"
+    fix_noise = False
 
     os.makedirs(video_dir_path, exist_ok=True)
     import gym_aloha
@@ -332,10 +341,12 @@ def run_basic_pi0_aloha(seeds : list[int] = [0], device : str = "cuda"):
         "render_mode": "rgb_array",
     }
     env = gym.make("gym_aloha/AlohaTransferCube-v0", **gym_kwargs)
+    env._max_episode_steps = 400
 
     # policy = PI0Policy.from_pretrained("BrunoM42/pi0_aloha_transfer_cube").to(device)
     # policy = PI0Policy.from_pretrained("../lerobot/outputs/train/pi0_transfer_cube/checkpoints/005000/pretrained_model").to(device)
-    policy = PI0Policy.from_pretrained("../lerobot/outputs/train/pi0_transfer_cube/checkpoints/last/pretrained_model").to(device)
+    # policy = PI0Policy.from_pretrained("../lerobot/outputs/train/pi0_transfer_cube/checkpoints/last/pretrained_model").to(device)
+    policy = PI0Policy.from_pretrained("./my_models/pi0_transfercube_ckpts/my_pi0_transfercube_ckpt").to(device)
 
     # policy = PI0Policy.from_pretrained("lerobot/pi0")
 
@@ -397,12 +408,16 @@ def run_basic_pi0_aloha(seeds : list[int] = [0], device : str = "cuda"):
 
             frames.append(env.render())
             done = truncated or terminated
+            if terminated:
+                reward = 0
+            else:
+                reward = -1
             total_rewards += reward
 
             if done:
                 break
 
-        print(f"Done: {done} / episode returns: {total_rewards}")
+        print(f"Terminated: {terminated} / Truncated: {truncated}, Done: {done} / episode returns: {total_rewards}")
         video_file_name = f"aloha_pi0_rollout{rollout}_seed{seed}.mp4"
         imageio.mimsave(f"{video_dir_path}/{video_file_name}", frames, fps=fps)
 
@@ -418,10 +433,12 @@ def generate_steerable_aloha_gym_env(
         "render_mode": "rgb_array",
     }
     env = gym.make("gym_aloha/AlohaTransferCube-v0", **gym_kwargs)
+    env._max_episode_steps = 400
 
     # policy = PI0Policy.from_pretrained("BrunoM42/pi0_aloha_transfer_cube").to(device)
     # policy = PI0Policy.from_pretrained("../lerobot/outputs/train/pi0_transfer_cube/checkpoints/005000/pretrained_model").to(device)
-    policy = PI0Policy.from_pretrained("../lerobot/outputs/train/pi0_transfer_cube/checkpoints/last/pretrained_model").to(device)
+    # policy = PI0Policy.from_pretrained("../lerobot/outputs/train/pi0_transfer_cube/checkpoints/last/pretrained_model").to(device)
+    policy = PI0Policy.from_pretrained("./my_models/pi0_transfercube_ckpts/my_pi0_transfercube_ckpt").to(device)
 
     wrapped_env = Pi0EnvWrapper(env=env, policy=policy, desired_action_dim=desired_action_dim)
     
@@ -429,10 +446,10 @@ def generate_steerable_aloha_gym_env(
 
 def test_gym_wrapper_env():
     fix_noise = False
-    video_dir_path = "aloha_pi0_videos_wrapper_actionsize13_randomnoiseseed0_sampleactionspace"
+    video_dir_path = "aloha_pi0_videos_wrapper_actionsize1600_randomseeds_sampleagauss"
 
     os.makedirs(video_dir_path, exist_ok=True)
-    seeds = [0]*10
+    seeds = [2]*10
     fps = 30
     max_steps = 2000
     desired_action_dim = 1600
@@ -442,10 +459,10 @@ def test_gym_wrapper_env():
     wrapped_env = generate_steerable_aloha_gym_env(device, desired_action_dim)
 
     if fix_noise:
-        # action =  np.random.randn(
-        #         desired_action_dim
-        #     )
-        action = wrapped_env.action_space.sample()
+        action =  np.random.randn(
+                desired_action_dim
+            )
+        # action = wrapped_env.action_space.sample()
 
     for rollout_idx, seed in enumerate(seeds):
         obs, info = wrapped_env.reset(seed=seed)
@@ -454,10 +471,10 @@ def test_gym_wrapper_env():
         frames = wrapped_env.get_wrapper_attr("frames")
         for current_step in range(max_steps):
             if not fix_noise:
-                # action =  np.random.randn(
-                #                 desired_action_dim
-                #             )
-                action = wrapped_env.action_space.sample()
+                action =  np.random.randn(
+                                desired_action_dim
+                            )
+                # action = wrapped_env.action_space.sample()
             obs, reward, terminated, truncated, info = wrapped_env.step(action)
 
             total_rewards += reward
@@ -467,13 +484,13 @@ def test_gym_wrapper_env():
             if done:
                 break
         
-        print(f"Done: {done} / episode returns: {total_rewards}")
+        print(f"Terminated: {terminated} / Truncated: {truncated} / Done: {done} / episode returns: {total_rewards}")
         video_file_name = f"aloha_pi0_rollout{rollout_idx}_seed{seed}.mp4"
         imageio.mimsave(f"{video_dir_path}/{video_file_name}", frames, fps=fps)
 
 
 def main():
-    seeds = [4]*10
+    seeds = [2]*20
     # run_basic_pi0_aloha(seeds=seeds)
 
     test_gym_wrapper_env()

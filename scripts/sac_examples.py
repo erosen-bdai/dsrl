@@ -413,14 +413,14 @@ if __name__ == "__main__":
             },
             "aloha_pick_cube_latent":
             {
-                "policy": "MlpPolicy",
+                "policy": "MultiInputPolicy",
                 "learning_rate":0.0001,
                 "gamma":0.999,
                 "gradient_steps":20,
                 "target_entropy":0,
                 "learning_starts":1000,
                 "train_freq": (1, "episode"),
-                "policy_kwargs" : {"net_arch": [512,512],
+                "policy_kwargs" : { # "net_arch": [512,512],
                                    "log_std_init": 0.0,
                                    "n_critics": 10,} 
             },
@@ -470,7 +470,7 @@ if __name__ == "__main__":
             "aloha_pick_cube_latent":
             {
                 "total_timesteps": 1e6,
-                "desired_action_dim":40
+                "desired_action_dim":50
             },
             "gym_hil":{
                 "total_timesteps": 1e6,
@@ -506,7 +506,7 @@ if __name__ == "__main__":
     eval_env = make_env("eval", record_trigger=1,other_config=other_config) # trigger on every step of eval, eval recording happens at eval_freq
 
     model = SAC(env=env, verbose=1, tensorboard_log=f"runs/{run.id}", **sac_config)
-
+    
     # CALLBACKS
     # eval callback
     eval_freq = 5000

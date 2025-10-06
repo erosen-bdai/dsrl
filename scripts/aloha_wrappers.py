@@ -34,7 +34,7 @@ class Pi0EnvWrapper(gym.Env):
 
         # For getting box pose
 
-        self.obs_strategy = "box" # "pi0_encoder" 
+        self.obs_strategy = "raw" # "pi0_encoder", "raw", "box"
         if self.obs_strategy == "box":
             self.dm_env = env.env.env.env._env
 
@@ -55,6 +55,12 @@ class Pi0EnvWrapper(gym.Env):
             self.observation_space = spaces.Box(
                 low=-np.inf, high=np.inf, shape=(self.obs_dim_size,), dtype=np.float32
             )
+        elif self.obs_strategy == "raw":
+            # pass, no need to do anything since the obs is same as bas
+            self.observation_space = spaces.Dict({
+            "agent_pos": self.env.observation_space["agent_pos"],
+            "pixels": self.env.observation_space["pixels"]["top"],
+        })
         else:
             raise ValueError(f"self.obs_strategy needs to be valid")
 
@@ -87,6 +93,12 @@ class Pi0EnvWrapper(gym.Env):
         # Mirror the base env's render_mode if it exists
         self.render_mode = getattr(env, "render_mode", None)
 
+    def flat_obs(self, obs):
+        return {
+            "agent_pos": obs["agent_pos"],
+            "pixels": obs["pixels"]["top"],
+        }
+
     def render(self):
         if self.render_mode is None:
             raise ValueError(
@@ -97,7 +109,7 @@ class Pi0EnvWrapper(gym.Env):
 
     def reset(self, **kwargs):
         # TODO load gym seed if it was given at construction
-        obs, info = self.env.reset()
+        obs, info = self.env.reset(seed=2)
         
         # save the obs for base policy to use in next step
         self._last_obs = obs
@@ -170,6 +182,8 @@ class Pi0EnvWrapper(gym.Env):
             img_state_emb = torch.cat([mean_pool_prefix_embs,state],axis=1).detach().cpu().numpy()
             
             return img_state_emb, info
+        elif self.obs_strategy == "raw":
+            return self.flat_obs(self._last_obs), info
 
     def expand_action(self, action, target_size):
         """
@@ -317,6 +331,8 @@ class Pi0EnvWrapper(gym.Env):
             # TODO: For now, using just raw state (14 dim). The policy.model has `state_proj` where state is processed in denoise_step, could use that too
             final_obs = torch.cat([mean_pool_prefix_embs,state],axis=1).detach().cpu().numpy()
             
+        elif self.obs_strategy == "raw":
+            final_obs = self.flat_obs(self._last_obs)
 
         # return last obs, terminated, truncated, and info + the cumulative rewards along the way
         # TODO: The truncated comes from the base env, but I think pusht_env always return Fales for truncated (i.e: no timeouts).
@@ -490,7 +506,7 @@ def test_gym_wrapper_env():
 
 
 def main():
-    seeds = [2]*20
+    # seeds = [2]*20
     # run_basic_pi0_aloha(seeds=seeds)
 
     test_gym_wrapper_env()

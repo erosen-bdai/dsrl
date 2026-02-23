@@ -194,6 +194,7 @@ class DiffusionPolicyEnvWrapper(VecEnvWrapper):
 	def __init__(self, env, cfg, base_policy):
 		super().__init__(env)
 		self.action_horizon = cfg.act_steps
+		self.option_horizon = getattr(cfg, "option_horizon", 1)
 		self.action_dim = cfg.action_dim
 		self.action_space = spaces.Box(
 			low=-cfg.train.action_magnitude*np.ones(self.action_dim*self.action_horizon),
@@ -210,18 +211,33 @@ class DiffusionPolicyEnvWrapper(VecEnvWrapper):
 		self.device = cfg.model.device
 		self.base_policy = base_policy
 		self.obs = None
+		self._pending_actions = None
 
 	def step_async(self, actions):
 		actions = torch.tensor(actions, device=self.device, dtype=torch.float32)
-		actions = actions.view(-1, self.action_horizon, self.action_dim)
-		diffused_actions = self.base_policy(self.obs, actions)
-		self.venv.step_async(diffused_actions)
+		self._pending_actions = actions.view(-1, self.action_horizon, self.action_dim)
 
 	def step_wait(self):
-		obs, rewards, dones, infos = self.venv.step_wait()
-		self.obs = torch.tensor(obs, device=self.device, dtype=torch.float32)
+		if self._pending_actions is None:
+			raise RuntimeError("step_wait called before step_async")
+		total_rewards = None
+		obs = None
+		dones = None
+		infos = None
+		for _ in range(self.option_horizon):
+			diffused_actions = self.base_policy(self.obs, self._pending_actions)
+			self.venv.step_async(diffused_actions)
+			obs, rewards, dones, infos = self.venv.step_wait()
+			if total_rewards is None:
+				total_rewards = rewards
+			else:
+				total_rewards = total_rewards + rewards
+			self.obs = torch.tensor(obs, device=self.device, dtype=torch.float32)
+			if np.any(dones):
+				break
+		self._pending_actions = None
 		obs_out = self.obs
-		return obs_out.detach().cpu().numpy(), rewards, dones, infos
+		return obs_out.detach().cpu().numpy(), total_rewards, dones, infos
 
 	def reset(self):
 		obs = self.venv.reset()

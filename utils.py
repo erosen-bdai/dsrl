@@ -31,6 +31,7 @@ def load_base_policy(cfg):
 class LoggingCallback(BaseCallback):
 	def __init__(self, 
 		action_chunk=4, 
+		option_horizon=1,
 		log_freq=1000,
 		use_wandb=True, 
 		eval_env=None, 
@@ -46,6 +47,7 @@ class LoggingCallback(BaseCallback):
 	):
 		super().__init__(verbose)
 		self.action_chunk = action_chunk
+		self.option_horizon = option_horizon
 		self.log_freq = log_freq
 		self.episode_rewards = []
 		self.episode_lengths = []
@@ -74,7 +76,7 @@ class LoggingCallback(BaseCallback):
 		self.total_reward += np.mean(rew)
 		self.episode_success[rew > -self.rew_offset] = 1
 		self.episode_completed[self.locals['dones']] = 1
-		self.total_timesteps += self.action_chunk * self.model.n_envs
+		self.total_timesteps += self.action_chunk * self.option_horizon * self.model.n_envs
 		if self.n_calls % self.log_freq == 0:
 			if len(self.episode_rewards) > 0:
 				if self.use_wandb:

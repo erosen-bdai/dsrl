@@ -21,6 +21,7 @@ obs_dim: 17
 action_dim: 6
 cond_steps: 1
 act_steps: 4
+option_horizon: 1
 load_offline_data: False
 deterministic_eval: False 
 
@@ -30,8 +31,8 @@ save_model_interval: 10000
 save_replay_buffer: False
 
 env:
-  n_envs:  4
-  n_eval_envs: 25
+  n_envs:  1
+  n_eval_envs: 1
   name: ${env_name}
   max_episode_steps: 1000
   reset_at_iteration: False

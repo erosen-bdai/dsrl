@@ -49,7 +49,8 @@ def main(cfg: OmegaConf):
 			config=OmegaConf.to_container(cfg, resolve=True),
 		)
 
-	MAX_STEPS = int(cfg.env.max_episode_steps / cfg.act_steps)
+	option_horizon = getattr(cfg, "option_horizon", 1)
+	MAX_STEPS = int(cfg.env.max_episode_steps / (cfg.act_steps * option_horizon))
 
 	num_env = cfg.env.n_envs
 	def make_env():
@@ -148,6 +149,7 @@ def main(cfg: OmegaConf):
 
 	logging_callback = LoggingCallback(
 		action_chunk = cfg.act_steps, 
+		option_horizon = option_horizon,
 		eval_episodes = int(cfg.num_evals / num_env_eval), 
 		log_freq=MAX_STEPS, 
 		use_wandb=cfg.use_wandb, 

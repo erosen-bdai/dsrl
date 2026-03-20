@@ -173,6 +173,8 @@ class ActionChunkWrapper(gymnasium.Env):
 			reward_.append(reward_i)
 			done_.append(done_i)
 			info_.append(info_i)
+			if done_i or self.count >= self.max_episode_steps:
+				break
 		obs = obs_[-1]
 		reward = sum(reward_)
 		done = np.max(done_)

@@ -64,7 +64,8 @@ def main(cfg: OmegaConf):
 		return env
 
 	base_policy = load_base_policy(cfg)
-	env = make_vec_env(make_env, n_envs=num_env, vec_env_cls=SubprocVecEnv)
+	train_vec_env_cls = DummyVecEnv if num_env == 1 else SubprocVecEnv
+	env = make_vec_env(make_env, n_envs=num_env, vec_env_cls=train_vec_env_cls)
 	if cfg.algorithm == 'dsrl_sac':
 		env = DiffusionPolicyEnvWrapper(env, cfg, base_policy)
 	env.seed(cfg.seed + 1)
@@ -142,7 +143,8 @@ def main(cfg: OmegaConf):
 	)
 
 	num_env_eval = cfg.env.n_eval_envs
-	eval_env = make_vec_env(make_env, n_envs=num_env_eval, vec_env_cls=SubprocVecEnv)
+	eval_vec_env_cls = DummyVecEnv if num_env_eval == 1 else SubprocVecEnv
+	eval_env = make_vec_env(make_env, n_envs=num_env_eval, vec_env_cls=eval_vec_env_cls)
 	if cfg.algorithm == 'dsrl_sac':
 		eval_env = DiffusionPolicyEnvWrapper(eval_env, cfg, base_policy)
 	eval_env.seed(cfg.seed + num_env + 1) 
